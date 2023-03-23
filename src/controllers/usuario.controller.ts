@@ -1,3 +1,4 @@
+import {service} from '@loopback/core';
 import {
   Count,
   CountSchema,
@@ -7,23 +8,29 @@ import {
   Where,
 } from '@loopback/repository';
 import {
-  post,
-  param,
+  del,
   get,
   getModelSchemaRef,
+  HttpErrors,
+  param,
   patch,
+  post,
   put,
-  del,
   requestBody,
   response,
 } from '@loopback/rest';
-import {Usuario} from '../models';
-import {UsuarioRepository} from '../repositories';
+import {Credentials, Login, Usuario} from '../models';
+import {LoginRepository, UsuarioRepository} from '../repositories';
+import {SeguridadService} from '../services';
 
 export class UsuarioController {
   constructor(
     @repository(UsuarioRepository)
-    public usuarioRepository : UsuarioRepository,
+    public usuarioRepository: UsuarioRepository,
+    @service(SeguridadService)
+    public securityServices: SeguridadService,
+    @repository(LoginRepository)
+    public loginRepository: LoginRepository,
   ) {}
 
   @post('/usuarios')
@@ -44,6 +51,14 @@ export class UsuarioController {
     })
     usuario: Omit<Usuario, '_id'>,
   ): Promise<Usuario> {
+    // create password
+    const password = this.securityServices.createRandomText(10);
+    console.log(password);
+    const encryptPassword = this.securityServices.encriptText(password);
+    usuario.password = encryptPassword;
+    //send email
+
+    //send sms
     return this.usuarioRepository.create(usuario);
   }
 
@@ -52,9 +67,7 @@ export class UsuarioController {
     description: 'Usuario model count',
     content: {'application/json': {schema: CountSchema}},
   })
-  async count(
-    @param.where(Usuario) where?: Where<Usuario>,
-  ): Promise<Count> {
+  async count(@param.where(Usuario) where?: Where<Usuario>): Promise<Count> {
     return this.usuarioRepository.count(where);
   }
 
@@ -106,7 +119,8 @@ export class UsuarioController {
   })
   async findById(
     @param.path.string('id') id: string,
-    @param.filter(Usuario, {exclude: 'where'}) filter?: FilterExcludingWhere<Usuario>
+    @param.filter(Usuario, {exclude: 'where'})
+    filter?: FilterExcludingWhere<Usuario>,
   ): Promise<Usuario> {
     return this.usuarioRepository.findById(id, filter);
   }
@@ -146,5 +160,40 @@ export class UsuarioController {
   })
   async deleteById(@param.path.string('id') id: string): Promise<void> {
     await this.usuarioRepository.deleteById(id);
+  }
+
+  /**
+   * Metodos personalizados para la API
+   */
+
+  @post('/identificar-usuario')
+  @response(200, {
+    description: 'identify user by password and email',
+    content: {'application/json': {schema: getModelSchemaRef(Credentials)}},
+  })
+  async identificarUsuario(
+    @requestBody({
+      content: {
+        'application/json': {
+          schema: getModelSchemaRef(Credentials),
+        },
+      },
+    })
+    credentials: Credentials,
+  ): Promise<object> {
+    const user = await this.securityServices.validateUser(credentials);
+    if (user) {
+      const code2fa = this.securityServices.createRandomText(5);
+      const login: Login = new Login();
+      login.usuarioId = user._id!;
+      login.facode2fa = code2fa;
+      login.statuscode2fa = false;
+      login.token = '';
+      login.tokenstate = false;
+      await this.loginRepository.create(login);
+      //notificar por correo o sms
+      return user;
+    }
+    return new HttpErrors[401]('Credenciales incorrectas');
   }
 }
